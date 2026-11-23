@@ -1,13 +1,14 @@
 """API REST do AgroConecta — Python (biblioteca padrão) + SQLite. Sem dependências externas.
 
-Executar:  python backend/servidor.py          (porta 8000, apenas em 127.0.0.1)
+Executar localmente: python servidor.py (dentro da pasta backend)
 
-Variáveis de ambiente (todas opcionais):
-  AGRO_PORTA         porta do servidor (padrão 8000)
-  AGRO_HOST          endereço de escuta (padrão 127.0.0.1)
-  AGRO_DB            caminho do arquivo SQLite
-  AGRO_ADMIN_TOKEN   se definido, exige o cabeçalho X-Admin-Token para ler/alterar/excluir
-                     cadastros e mensagens (dados pessoais). Defina-o sempre fora do ambiente local.
+Variáveis de ambiente:
+  PORT                porta fornecida pela plataforma (preferencial)
+  AGRO_PORTA          porta alternativa (padrão 8000)
+  AGRO_HOST           endereço de escuta (padrão 0.0.0.0)
+  AGRO_DB             caminho do arquivo SQLite
+  AGRO_ORIGEM         origens permitidas pelo CORS, separadas por vírgula
+  AGRO_ADMIN_TOKEN    exige X-Admin-Token nas rotas administrativas
 """
 import hmac
 import json
@@ -35,6 +36,25 @@ class Manipulador(BaseHTTPRequestHandler):
     def log_message(self, formato, *args):
         pass  # silencia o log padrão (evita registrar dados pessoais em query strings)
 
+    def _origens_permitidas(self):
+        return {
+            origem.strip().rstrip("/")
+            for origem in os.environ.get("AGRO_ORIGEM", "").split(",")
+            if origem.strip()
+        }
+
+    def _adicionar_cors(self):
+        origem = self.headers.get("Origin", "").rstrip("/")
+        if origem and origem in self._origens_permitidas():
+            self.send_header("Access-Control-Allow-Origin", origem)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, X-Admin-Token, X-Cliente-Id, X-Token-Remocao",
+            )
+            self.send_header("Access-Control-Max-Age", "86400")
+
     def _enviar(self, codigo, corpo=None):
         dados = b"" if corpo is None else json.dumps(corpo, ensure_ascii=False).encode("utf-8")
         self.send_response(codigo)
@@ -42,9 +62,16 @@ class Manipulador(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(dados)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self._adicionar_cors()
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(dados)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._adicionar_cors()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _ler_json(self):
         tamanho = int(self.headers.get("Content-Length") or 0)
@@ -276,10 +303,10 @@ ROTAS = [
 
 def main():
     banco.iniciar_banco()
-    host = os.environ.get("AGRO_HOST", "127.0.0.1")
-    porta = int(os.environ.get("AGRO_PORTA", "8000"))
-    aviso = "" if ADMIN_TOKEN else "  (AGRO_ADMIN_TOKEN não definido: rotas administrativas abertas — use só em ambiente local)"
-    print(f"API AgroConecta em http://{host}:{porta}{aviso}")
+    host = os.environ.get("AGRO_HOST", "0.0.0.0")
+    porta = int(os.environ.get("PORT") or os.environ.get("AGRO_PORTA", "8000"))
+    aviso = "" if ADMIN_TOKEN else "  (AGRO_ADMIN_TOKEN não definido: rotas administrativas abertas)"
+    print(f"API AgroConecta escutando em {host}:{porta}{aviso}")
     ThreadingHTTPServer((host, porta), Manipulador).serve_forever()
 
 
